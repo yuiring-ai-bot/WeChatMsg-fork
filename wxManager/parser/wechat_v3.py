@@ -60,6 +60,13 @@ def decompress(data):
     return decoded_string
 
 
+def safe_float(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 # 定义抽象工厂基类
 class MessageFactory(ABC):
     @abstractmethod
@@ -661,11 +668,11 @@ class PositionMessageFactory(MessageFactory, Singleton):
             scale=0
         )
         info = parser_position(message_content)
-        msg.x = eval(info.get('x', ''))
-        msg.y = eval(info.get('y', ''))
+        msg.x = safe_float(info.get('x'))
+        msg.y = safe_float(info.get('y'))
         msg.poiname = info.get('poiname', '')
         msg.label = info.get('label', '')
-        msg.scale = eval(info.get('scale', ''))
+        msg.scale = safe_float(info.get('scale'))
         self.add_message(msg)
         return msg
 

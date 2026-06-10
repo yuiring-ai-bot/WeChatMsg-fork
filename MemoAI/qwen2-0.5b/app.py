@@ -1,186 +1,116 @@
+import json
 import os
-import copy
-import random
-import threading
-import subprocess
+import urllib.error
+import urllib.request
+from typing import Dict, List, Optional, Tuple
+
 import gradio as gr
-from typing import List, Optional, Tuple, Dict
 
 
-os.system("pip uninstall -y tensorflow tensorflow-estimator tensorflow-io-gcs-filesystem")
-os.environ["LANG"] = "C"
-os.environ["LC_ALL"] = "C"
-
-default_system = '你是一个微信聊天机器人'
-
-from dashinfer.helper import EngineHelper, ConfigManager
-
-log_lock = threading.Lock()
-
-config_file = "di_config.json"
-config = ConfigManager.get_config_from_json(config_file)
-
-def download_model(model_id, revision, source="modelscope"):
-    print(f"Downloading model {model_id} (revision: {revision}) from {source}")
-    if source == "modelscope":
-        from modelscope import snapshot_download
-        model_dir = snapshot_download(model_id, revision=revision)
-    elif source == "huggingface":
-        from huggingface_hub import snapshot_download
-        model_dir = snapshot_download(repo_id=model_id)
-    else:
-        raise ValueError("Unknown source")
-
-    print(f"Save model to path {model_dir}")
-
-    return model_dir
-
-cmd = f"pip show dashinfer | grep 'Location' | cut -d ' ' -f 2"
-package_location = subprocess.run(cmd,
-                                  stdout=subprocess.PIPE,
-                                  stderr=subprocess.PIPE,
-                                  shell=True,
-                                  text=True)
-package_location = package_location.stdout.strip()
-os.environ["AS_DAEMON_PATH"] = package_location + "/dashinfer/allspark/bin"
-os.environ["AS_NUMA_NUM"] = str(len(config["device_ids"]))
-os.environ["AS_NUMA_OFFSET"] = str(config["device_ids"][0])
-
-## download original model
-## download model from modelscope
-original_model = {
-    "source": "modelscope",
-    "model_id": config["model_space"] + config["model_name"],
-    "revision": "master",
-    "model_path": ""
-}
-original_model["model_path"] = download_model(original_model["model_id"],
-                                              original_model["revision"],
-                                              original_model["source"])
-
-engine_helper = EngineHelper(config)
-engine_helper.verbose = True
-engine_helper.init_tokenizer(original_model["model_path"])
-
-## convert huggingface model to dashinfer model
-## only one conversion is required
-engine_helper.convert_model(original_model["model_path"])
-
-engine_helper.init_engine()
-engine_max_batch = engine_helper.engine_config["engine_max_batch"]
-
-###################################################
+LM_STUDIO_BASE_URL = os.environ.get("LM_STUDIO_BASE_URL", "http://127.0.0.1:1234/v1").rstrip("/")
+LM_STUDIO_MODEL = os.environ.get("LM_STUDIO_MODEL", "local-model")
+DEFAULT_SYSTEM = os.environ.get("LM_STUDIO_SYSTEM_PROMPT", "You are a helpful assistant.")
+REQUEST_TIMEOUT = int(os.environ.get("LM_STUDIO_TIMEOUT", "120"))
 
 History = List[Tuple[str, str]]
 Messages = List[Dict[str, str]]
 
 
-class Role:
-    USER = 'user'
-    SYSTEM = 'system'
-    BOT = 'bot'
-    ASSISTANT = 'assistant'
-    ATTACHMENT = 'attachment'
+def clear_session() -> Tuple[str, History]:
+    return "", []
 
 
-def clear_session() -> History:
-    return '', []
-
-
-def modify_system_session(system: str) -> str:
-    if system is None or len(system) == 0:
-        system = default_system
+def modify_system_session(system: Optional[str]) -> Tuple[str, str, History]:
+    system = system or DEFAULT_SYSTEM
     return system, system, []
 
 
-def history_to_messages(history: History, system: str) -> Messages:
-    messages = [{'role': Role.SYSTEM, 'content': system}]
-    for h in history:
-        messages.append({'role': Role.USER, 'content': h[0]})
-        messages.append({'role': Role.ASSISTANT, 'content': h[1]})
+def history_to_messages(history: Optional[History], system: str, query: str) -> Messages:
+    messages = [{"role": "system", "content": system or DEFAULT_SYSTEM}]
+    for user_text, assistant_text in history or []:
+        messages.append({"role": "user", "content": user_text})
+        messages.append({"role": "assistant", "content": assistant_text})
+    messages.append({"role": "user", "content": query})
     return messages
 
 
-def messages_to_history(messages: Messages) -> Tuple[str, History]:
-    assert messages[0]['role'] == Role.SYSTEM
-    system = messages[0]['content']
-    history = []
-    for q, r in zip(messages[1::2], messages[2::2]):
-        history.append([q['content'], r['content']])
-    return system, history
-
-
-def message_to_prompt(messages: Messages) -> str:
-    prompt = ""
-    for item in messages:
-        im_start, im_end = "<|im_start|>", "<|im_end|>"
-        prompt += f"\n{im_start}{item['role']}\n{item['content']}{im_end}"
-    prompt += f"\n{im_start}assistant\n"
-    return prompt
-
-
-def model_chat(query: Optional[str], history: Optional[History],
-               system: str) -> Tuple[str, str, History]:
-    if query is None:
-        query = ''
-    if history is None:
-        history = []
-
-    messages = history_to_messages(history, system)
-    messages.append({'role': Role.USER, 'content': query})
-    prompt = message_to_prompt(messages)
-
-    gen_cfg = copy.deepcopy(engine_helper.default_gen_cfg)
-    gen_cfg["max_length"] = 1024
-    gen_cfg["seed"] = random.randint(0, 10000)
-
-    request_list = engine_helper.create_request([prompt], [gen_cfg])
-
-    request = request_list[0]
-    gen = engine_helper.process_one_request_stream(request)
-    for response in gen:
-        role = Role.ASSISTANT
-        system, history = messages_to_history(messages + [{'role': role, 'content': response}])
-        yield '', history, system
-
-    json_str = engine_helper.convert_request_to_jsonstr(request)
-    log_lock.acquire()
+def call_lm_studio(messages: Messages) -> str:
+    payload = {
+        "model": LM_STUDIO_MODEL,
+        "messages": messages,
+        "temperature": 0.7,
+        "stream": False,
+    }
+    data = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        f"{LM_STUDIO_BASE_URL}/chat/completions",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
     try:
-        print(f"{json_str}\n")
-    finally:
-        log_lock.release()
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except urllib.error.URLError as exc:
+        raise RuntimeError(
+            f"Cannot reach LM Studio at {LM_STUDIO_BASE_URL}. "
+            "Start the LM Studio local server and load a model first."
+        ) from exc
 
-###################################################
+    choices = result.get("choices") or []
+    if not choices:
+        raise RuntimeError(f"LM Studio returned no choices: {result}")
+    message = choices[0].get("message") or {}
+    return message.get("content", "")
+
+
+def model_chat(query: Optional[str], history: Optional[History], system: str):
+    query = query or ""
+    history = history or []
+    if not query.strip():
+        yield "", history, system or DEFAULT_SYSTEM
+        return
+
+    try:
+        reply = call_lm_studio(history_to_messages(history, system or DEFAULT_SYSTEM, query))
+    except Exception as exc:
+        reply = f"LM Studio request failed: {exc}"
+
+    yield "", history + [(query, reply)], system or DEFAULT_SYSTEM
+
 
 with gr.Blocks() as demo:
-    demo_title = "<center>微信的你</center>"
-    gr.Markdown(demo_title)
+    gr.Markdown("# LM Studio Chat")
     with gr.Row():
         with gr.Column(scale=3):
-            system_input = gr.Textbox(value=default_system,
-                                      lines=1,
-                                      label='System')
+            system_input = gr.Textbox(value=DEFAULT_SYSTEM, lines=2, label="System")
         with gr.Column(scale=1):
-            modify_system = gr.Button("🛠️ Set system prompt and clear history.", scale=2)
-        system_state = gr.Textbox(value=default_system, visible=False)
-    chatbot = gr.Chatbot(label=config["model_name"])
-    textbox = gr.Textbox(lines=2, label='Input')
+            modify_system = gr.Button("Set system and clear")
+        system_state = gr.Textbox(value=DEFAULT_SYSTEM, visible=False)
+    chatbot = gr.Chatbot(label=f"LM Studio: {LM_STUDIO_MODEL}")
+    textbox = gr.Textbox(lines=2, label="Input")
 
     with gr.Row():
-        clear_history = gr.Button("🧹清除历史记录")
-        sumbit = gr.Button("🚀和我聊天!")
+        clear_history = gr.Button("Clear")
+        submit = gr.Button("Send")
 
-    sumbit.click(model_chat,
-                 inputs=[textbox, chatbot, system_state],
-                 outputs=[textbox, chatbot, system_input],
-                 concurrency_limit=engine_max_batch)
-    clear_history.click(fn=clear_session,
-                        inputs=[],
-                        outputs=[textbox, chatbot],
-                        concurrency_limit=engine_max_batch)
-    modify_system.click(fn=modify_system_session,
-                        inputs=[system_input],
-                        outputs=[system_state, system_input, chatbot],
-                        concurrency_limit=engine_max_batch)
+    submit.click(
+        model_chat,
+        inputs=[textbox, chatbot, system_state],
+        outputs=[textbox, chatbot, system_input],
+    )
+    clear_history.click(fn=clear_session, inputs=[], outputs=[textbox, chatbot])
+    modify_system.click(
+        fn=modify_system_session,
+        inputs=[system_input],
+        outputs=[system_state, system_input, chatbot],
+    )
 
-demo.queue(api_open=False).launch(height=800, share=False, server_name="127.0.0.1", server_port=7860)
+
+if __name__ == "__main__":
+    demo.queue(api_open=False).launch(
+        height=800,
+        share=False,
+        server_name="127.0.0.1",
+        server_port=int(os.environ.get("GRADIO_PORT", "7860")),
+    )

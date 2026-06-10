@@ -50,6 +50,13 @@ def decompress(data):
         return ''
 
 
+def safe_float(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 class LimitedDict:
     # 数据缓存，最多存储k条数据，超出自动删除
     def __init__(self, k):
@@ -747,11 +754,11 @@ class PositionMessageFactory(MessageFactory, Singleton):
             scale=0
         )
         info = parser_position(message_content)
-        msg.x = eval(info.get('x', ''))
-        msg.y = eval(info.get('y', ''))
+        msg.x = safe_float(info.get('x'))
+        msg.y = safe_float(info.get('y'))
         msg.poiname = info.get('poiname', '')
         msg.label = info.get('label', '')
-        msg.scale = eval(info.get('scale', ''))
+        msg.scale = safe_float(info.get('scale'))
         self.add_message(msg)
         return msg
 

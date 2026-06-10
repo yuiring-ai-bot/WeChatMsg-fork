@@ -466,8 +466,6 @@ def get_nickname(pid):
                         # print(
                         #     f"匹配字符串: {identifier} 内容:  偏移: {offset} 在地址: {hex(base_address + offset + 0x10)}")
                         # print(string)
-                        with open('a.bin','wb') as f:
-                            f.write(target_data)
                         phone_addr = offset + 0x10
                         phone = read_string(target_data, phone_addr, 11)
 
@@ -481,8 +479,6 @@ def get_nickname(pid):
                         account_name_length = read_num(target_data, phone_addr - 0x30, 8)
                         # print('account_name_length', account_name_length)
                         account_name = read_string(target_data, phone_addr - 0x40, account_name_length)
-                        # with open('a.bin', 'wb') as f:
-                        #     f.write(target_data)
                         if not account_name:
                             addr = read_num(target_data, phone_addr - 0x40, 8)
                             # print(hex(addr))
