@@ -163,7 +163,7 @@ def get_decode_code_v4(wx_dir):
             xor_key_ = find_xor_key(cache_dir)
             if xor_key_ != -1:
                 return xor_key_
-    return 0
+    return -1
 
 
 def get_image_type(data: bytes) -> str:
