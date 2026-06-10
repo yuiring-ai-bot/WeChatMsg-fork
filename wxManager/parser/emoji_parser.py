@@ -9,8 +9,8 @@
 @Description : 
 """
 import base64
-import re
 import traceback
+import xml.etree.ElementTree as ET
 
 import xmltodict
 from google.protobuf.json_format import MessageToDict
@@ -29,10 +29,13 @@ def parser_emoji(xml_content):
     }
 
     def extract_msg(text):
-        # 使用正则表达式匹配第一个 <msg> 标签及其内容
-        pattern = r'(<msg>.*?</msg>)'
-        match = re.search(pattern, text)
-        return f'<msg>{match.group(0)}</msg>' if match else ''
+        # Extract the first msg element from XML fragments with surrounding text.
+        try:
+            root = ET.fromstring(f'<root>{text}</root>')
+        except ET.ParseError:
+            return ''
+        msg = root.find('.//msg')
+        return ET.tostring(msg, encoding='unicode') if msg is not None else ''
 
     xml_content = xml_content.strip().replace('&', '&amp;')
     try:
