@@ -5,6 +5,7 @@ data
 sqlcipher-3.0.1
 dist
 venv
+.venv
 venv_decrypt
 venv_main_pc
 TEST
