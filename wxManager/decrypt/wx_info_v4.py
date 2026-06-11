@@ -47,6 +47,23 @@ SALT_SIZE = 16
 finish_flag = False
 
 
+def key_diagnose_enabled():
+    return os.environ.get("WECHATMSG_KEY_DIAG", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def print_key_diagnose(message):
+    if key_diagnose_enabled():
+        print(f"[key-diagnose] {message}")
+
+
+def wide_key_scan_enabled():
+    return os.environ.get("WECHATMSG_KEY_WIDE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def address_in_regions(address, regions, size=KEY_SIZE):
+    return any(base_address <= address <= base_address + region_size - size for base_address, region_size in regions)
+
+
 # 定义 MEMORY_BASIC_INFORMATION 结构
 class MEMORY_BASIC_INFORMATION(ctypes.Structure):
     _fields_ = [
@@ -70,7 +87,7 @@ kernel32 = ctypes.windll.kernel32
 
 # 打开目标进程
 def open_process(pid):
-    return ctypes.windll.kernel32.OpenProcess(PROCESS_ALL_ACCESS, False, pid)
+    return ctypes.windll.kernel32.OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, False, pid)
 
 
 # 读取目标进程内存
@@ -222,6 +239,8 @@ def is_ok(passphrase, buf):
     global finish_flag
     if finish_flag:
         return False
+    if not buf or len(buf) < PAGE_SIZE:
+        return False
     # 获取文件开头的 salt
     salt = buf[:SALT_SIZE]
     # salt 异或 0x3a 得到 mac_salt，用于计算 HMAC
@@ -243,18 +262,20 @@ def is_ok(passphrase, buf):
     hash_mac_start_offset = end - reserve + IV_SIZE
     hash_mac_end_offset = hash_mac_start_offset + len(hash_mac)
     if hash_mac == buf[hash_mac_start_offset:hash_mac_end_offset]:
-        print(f"[v] found key at 0x{start:x}")
+        print_key_diagnose("candidate key passed database HMAC verification")
         finish_flag = True
         return True
     return False
 
 
-def check_chunk(chunk, buf):
+def check_chunk(chunk, bufs):
     global finish_flag
     if finish_flag:
         return False
-    if is_ok(chunk, buf):
-        return chunk
+    for name, buf in bufs:
+        if is_ok(chunk, buf):
+            print_key_diagnose(f"candidate key verified by {name}")
+            return chunk
     return False
 
 
@@ -264,7 +285,7 @@ def verify_key(key: bytes, buffer: bytes, flag, result):
     if flag.value:  # 如果其他进程已找到结果，提前退出
         return False
     if is_ok(key, buffer):  # 替换为实际的目标检测条件
-        print("Key found!", key)
+        print_key_diagnose("key found")
         with flag.get_lock():  # 保证线程安全
             flag.value = True
             return key
@@ -272,16 +293,26 @@ def verify_key(key: bytes, buffer: bytes, flag, result):
         return False
 
 
-def get_key_(keys, buf):
+def get_key_(keys, bufs):
+    if not keys:
+        print_key_diagnose("no candidate key bytes to verify")
+        return None
+    if isinstance(bufs, bytes):
+        bufs = [("legacy-buffer", bufs)]
+    if not bufs:
+        print_key_diagnose("no database buffers available for key verification")
+        return None
+    print_key_diagnose(f"verifying {len(keys)} unique candidate key byte sequence(s)")
     pool = multiprocessing.Pool(processes=multiprocessing.cpu_count() // 2)
-    results = pool.starmap(check_chunk, ((key, buf) for key in keys))
+    results = pool.starmap(check_chunk, ((key, bufs) for key in keys))
     pool.close()
     pool.join()
 
     for r in results:
         if r:
-            print("Key found!", r)
+            print_key_diagnose("key found")
             return bytes.hex(r)
+    print_key_diagnose("all candidate key byte sequences failed database HMAC verification")
     return None
 
 
@@ -304,12 +335,25 @@ def get_key_inner(pid, process_infos):
         '''
     rules = yara.compile(source=rules_v4_key)
     pre_addresses = []
+    stats = {
+        "regions": len(process_infos),
+        "readable_regions": 0,
+        "rule_match_regions": 0,
+        "candidate_addresses": 0,
+        "nearby_pointer_values": 0,
+        "invalid_pointer_values": 0,
+        "memory_read_failures": 0,
+        "empty_key_reads": 0,
+    }
+    wide_scan = wide_key_scan_enabled()
     for base_address, region_size in process_infos:
         memory = read_process_memory(process_handle, base_address, region_size)
         # 定义目标数据（如内存或文件内容）
         target_data = memory  # 二进制数据
         if not memory:
+            stats["memory_read_failures"] += 1
             continue
+        stats["readable_regions"] += 1
         # 加上这些判断条件时灵时不灵
         # if b'-----BEGIN PUBLIC KEY-----' not in target_data or b'USER_KEYINFO' not in target_data:
         #     continue
@@ -319,6 +363,7 @@ def get_key_inner(pid, process_infos):
         #     f.write(target_data)
         matches = rules.match(data=target_data)
         if matches:
+            stats["rule_match_regions"] += 1
             for match in matches:
                 rule_name = match.rule
                 if rule_name == 'GetKeyAddrStub':
@@ -327,36 +372,113 @@ def get_key_inner(pid, process_infos):
                         offset, content = instance.offset, instance.matched_data
                         addr = read_num(target_data, offset, 8)
                         pre_addresses.append(addr)
+                        stats["candidate_addresses"] += 1
+                        if wide_scan:
+                            start_offset = max(0, offset - 64)
+                            end_offset = min(len(target_data) - 8, offset + len(content) + 64)
+                            for candidate_offset in range(start_offset, end_offset + 1, 8):
+                                pointer_value = read_num(target_data, candidate_offset, 8)
+                                stats["nearby_pointer_values"] += 1
+                                if address_in_regions(pointer_value, process_infos):
+                                    pre_addresses.append(pointer_value)
+                                    stats["candidate_addresses"] += 1
+                                else:
+                                    stats["invalid_pointer_values"] += 1
     keys = []
     key_set = set()
     for pre_address in pre_addresses:
-        if True or any([base_address <= pre_address <= base_address + region_size - KEY_SIZE for base_address, region_size in
-                process_infos]):
+        if address_in_regions(pre_address, process_infos):
             key = read_bytes_from_pid(pid, pre_address, 32)
+            if not key:
+                stats["empty_key_reads"] += 1
+                continue
             if key not in key_set:
                 keys.append(key)
                 key_set.add(key)
-    return keys
+    stats["unique_key_reads"] = len(keys)
+    return keys, stats
 
 
 def get_key(pid, process_handle, buf):
+    if isinstance(buf, bytes):
+        bufs = [("legacy-buffer", buf)]
+    else:
+        bufs = buf
+    print_key_diagnose(f"database verification buffer count: {len(bufs)}")
     process_infos = get_memory_regions(process_handle)
+    print_key_diagnose(f"private committed memory region count: {len(process_infos)}")
+    if not process_infos:
+        print_key_diagnose("no private committed memory regions found")
+        return None
 
     def split_list(lst, n):
         k, m = divmod(len(lst), n)
         return (lst[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n))
 
     keys = []
+    chunk_count = min(len(process_infos), 40)
     pool = multiprocessing.Pool(processes=multiprocessing.cpu_count() // 2)
     results = pool.starmap(get_key_inner, ((pid, process_info_) for process_info_ in
-                                           split_list(process_infos, min(len(process_infos), 40))))
+                                           split_list(process_infos, chunk_count)))
     pool.close()
     pool.join()
+    totals = {
+        "chunks": chunk_count,
+        "regions": 0,
+        "readable_regions": 0,
+        "rule_match_regions": 0,
+        "candidate_addresses": 0,
+        "nearby_pointer_values": 0,
+        "invalid_pointer_values": 0,
+        "memory_read_failures": 0,
+        "empty_key_reads": 0,
+        "unique_key_reads": 0,
+    }
     for r in results:
         if r:
-            keys += r
-    key = get_key_(keys, buf)
+            chunk_keys, chunk_stats = r
+            keys += chunk_keys
+            for name in totals:
+                if name != "chunks":
+                    totals[name] += chunk_stats.get(name, 0)
+    print_key_diagnose(
+        "scan summary: "
+        f"chunks={totals['chunks']} regions={totals['regions']} "
+        f"readable={totals['readable_regions']} rule_match_regions={totals['rule_match_regions']} "
+        f"candidate_addresses={totals['candidate_addresses']} "
+        f"nearby_pointer_values={totals['nearby_pointer_values']} "
+        f"invalid_pointer_values={totals['invalid_pointer_values']} "
+        f"unique_key_reads={totals['unique_key_reads']} "
+        f"memory_read_failures={totals['memory_read_failures']} "
+        f"empty_key_reads={totals['empty_key_reads']}"
+    )
+    key = get_key_(keys, bufs)
     return key
+
+
+def read_validation_buffers(wx_db_storage_dir):
+    candidates = [
+        ("favorite/favorite_fts.db", os.path.join(wx_db_storage_dir, "favorite", "favorite_fts.db")),
+        ("head_image/head_image.db", os.path.join(wx_db_storage_dir, "head_image", "head_image.db")),
+        ("contact/contact.db", os.path.join(wx_db_storage_dir, "contact", "contact.db")),
+        ("message/message_0.db", os.path.join(wx_db_storage_dir, "message", "message_0.db")),
+        ("message/message_1.db", os.path.join(wx_db_storage_dir, "message", "message_1.db")),
+    ]
+    buffers = []
+    for name, db_file_path in candidates:
+        if not os.path.exists(db_file_path):
+            print_key_diagnose(f"validation db missing: {name}")
+            continue
+        size = os.path.getsize(db_file_path)
+        if size < PAGE_SIZE:
+            print_key_diagnose(f"validation db skipped: {name} size={size} < {PAGE_SIZE}")
+            continue
+        with open(db_file_path, "rb") as f:
+            page = f.read(PAGE_SIZE)
+        header = page[:16].hex()
+        print_key_diagnose(f"validation db loaded: {name} size={size} first16={header}")
+        buffers.append((name, page))
+    return buffers
 
 
 def get_wx_dir(process_handle):
@@ -476,12 +598,11 @@ def dump_wechat_info_v4(pid) -> WeChatInfo | None:
     # print(wx_dir_cnt)
     if not wechat_info.wx_dir:
         return wechat_info
-    db_file_path = os.path.join(wechat_info.wx_dir, 'favorite', 'favorite_fts.db')
-    if not os.path.exists(db_file_path):
-        db_file_path = os.path.join(wechat_info.wx_dir, 'head_image', 'head_image.db')
-    with open(db_file_path, 'rb') as f:
-        buf = f.read()
-    wechat_info.key = get_key(pid, process_handle, buf)
+    bufs = read_validation_buffers(wechat_info.wx_dir)
+    if bufs:
+        wechat_info.key = get_key(pid, process_handle, bufs)
+    else:
+        print_key_diagnose("no usable validation database pages found")
     ctypes.windll.kernel32.CloseHandle(process_handle)
     wechat_info.wxid = '_'.join(wechat_info.wx_dir.split('\\')[-3].split('_')[0:-1])
     wechat_info.wx_dir = '\\'.join(wechat_info.wx_dir.split('\\')[:-2])
