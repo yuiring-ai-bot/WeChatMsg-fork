@@ -1,9 +1,11 @@
 #!/usr/bin/env python
 import argparse
+import base64
 import ctypes
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 from ctypes import wintypes
@@ -265,6 +267,175 @@ def verify_sqlite(db_path: Path) -> None:
         con.close()
 
 
+def load_key_cache(cache_path: Path) -> dict:
+    if not cache_path.exists():
+        return {"version": 1, "entries": {}}
+    with open(cache_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        return {"version": 1, "entries": {}}
+    data.setdefault("version", 1)
+    data.setdefault("entries", {})
+    return data
+
+
+def protect_key_for_current_user(key: str) -> str:
+    try:
+        import win32crypt
+    except ImportError as exc:
+        raise SystemExit("pywin32/win32crypt is required to save the key cache securely.") from exc
+    encrypted = win32crypt.CryptProtectData(key.encode("ascii"), "WeChatMsg safe_decrypt key", None, None, None, 0)
+    return base64.b64encode(encrypted).decode("ascii")
+
+
+def unprotect_key_for_current_user(encoded: str) -> str:
+    try:
+        import win32crypt
+    except ImportError as exc:
+        raise SystemExit("pywin32/win32crypt is required to read the key cache securely.") from exc
+    encrypted = base64.b64decode(encoded.encode("ascii"))
+    _, decrypted = win32crypt.CryptUnprotectData(encrypted, None, None, None, 0)
+    return decrypted.decode("ascii")
+
+
+def cache_identifiers(wxid: str, account_root: Path | None) -> list[str]:
+    identifiers = []
+    if wxid:
+        identifiers.append(wxid.lower())
+    if account_root:
+        identifiers.append(account_root.name.lower())
+        account_wxid = account_root.name.rsplit("_", 1)[0] if "_" in account_root.name else account_root.name
+        if account_wxid:
+            identifiers.append(account_wxid.lower())
+    return list(dict.fromkeys(identifiers))
+
+
+def lookup_cached_key(cache_path: Path, wxid: str = "", account_root: Path | None = None):
+    cache = load_key_cache(cache_path)
+    entries = cache.get("entries", {})
+    for identifier in cache_identifiers(wxid, account_root):
+        entry = entries.get(identifier)
+        if not entry:
+            continue
+        key = unprotect_key_for_current_user(entry["key_dpapi"])
+        if len(key) == 64:
+            cached_root = entry.get("account_root", "")
+            return key, cached_root, identifier
+    return "", "", ""
+
+
+def lookup_single_cached_account(cache_path: Path):
+    cache = load_key_cache(cache_path)
+    entries = cache.get("entries", {})
+    usable = []
+    seen_roots = set()
+    for identifier, entry in entries.items():
+        account_root = entry.get("account_root", "")
+        if not account_root or account_root in seen_roots:
+            continue
+        key = unprotect_key_for_current_user(entry["key_dpapi"])
+        if len(key) == 64 and Path(account_root).exists():
+            usable.append((key, account_root, identifier))
+            seen_roots.add(account_root)
+    if len(usable) == 1:
+        return usable[0]
+    return "", "", ""
+
+
+def save_cached_key(cache_path: Path, key: str, wxid: str, account_root: Path) -> None:
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache = load_key_cache(cache_path)
+    entries = cache.setdefault("entries", {})
+    entry = {
+        "key_dpapi": protect_key_for_current_user(key),
+        "wxid": wxid,
+        "account_root": str(account_root),
+    }
+    for identifier in cache_identifiers(wxid, account_root):
+        entries[identifier] = entry
+    with open(cache_path, "w", encoding="utf-8") as f:
+        json.dump(cache, f, ensure_ascii=False, indent=2)
+
+
+def show_key_cache(cache_path: Path) -> None:
+    cache = load_key_cache(cache_path)
+    entries = cache.get("entries", {})
+    if not entries:
+        print(f"No cached keys found in {cache_path}")
+        return
+    print(f"Cached key entries in {cache_path}:")
+    shown_roots = set()
+    for identifier, entry in sorted(entries.items()):
+        account_root = entry.get("account_root", "")
+        root_marker = account_root or identifier
+        if root_marker in shown_roots:
+            continue
+        shown_roots.add(root_marker)
+        wxid = entry.get("wxid", "")
+        exists = Path(account_root).exists() if account_root else False
+        print(f"- wxid={wxid or identifier} account_root={account_root or '<missing>'} exists={exists}")
+
+
+def confirm_unsafe_hook_key_extract(wxid: str, account_root: Path) -> None:
+    phrase = f"I AUTHORIZE HOOK KEY EXTRACTION FOR {wxid}"
+    print("")
+    print("Unsafe hook key extraction was requested.")
+    print("This may modify the running WeChat process temporarily.")
+    print(f"Account: {wxid}")
+    print(f"Source:  {account_root}")
+    print(f"Type exactly this phrase to continue: {phrase}")
+    typed = input("> ").strip()
+    if typed != phrase:
+        raise SystemExit("Unsafe hook key extraction was not authorized.")
+
+
+def run_unsafe_hook_key_extract(wxid: str, account_root: Path) -> str:
+    confirm_unsafe_hook_key_extract(wxid, account_root)
+    cli_path = PROJECT_ROOT / "tools" / "wx_key_cli" / "scripts" / "wx_key_cli.py"
+    dll_path = PROJECT_ROOT / "tools" / "wx_key_cli" / "dist" / "wx_key.dll"
+    if not cli_path.exists():
+        raise SystemExit(f"Hook backend CLI not found: {cli_path}")
+    if not dll_path.exists():
+        raise SystemExit(
+            f"Hook backend DLL not found: {dll_path}\n"
+            "Build it first with:\n"
+            "  powershell -ExecutionPolicy Bypass -File tools\\wx_key_cli\\scripts\\build_native.ps1"
+        )
+
+    cmd = [
+        sys.executable,
+        str(cli_path),
+        "--dll",
+        str(dll_path),
+        "--timeout",
+        "90",
+        "--yes",
+        "--src-dir",
+        str(account_root),
+        "--wxid",
+        wxid,
+    ]
+    print("Starting hook key extraction backend...")
+    proc = subprocess.run(
+        cmd,
+        cwd=str(PROJECT_ROOT),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    if proc.stdout:
+        print(proc.stdout, end="" if proc.stdout.endswith("\n") else "\n")
+    if proc.returncode != 0:
+        raise SystemExit(f"Hook key extraction failed with exit code {proc.returncode}.")
+
+    for line in proc.stdout.splitlines():
+        if line.startswith("KEY="):
+            key = line.split("=", 1)[1].strip()
+            if len(key) == 64:
+                return key
+    raise SystemExit("Hook key extraction finished but no KEY=... line was returned.")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Safely decrypt a copied WeChat v4 database directory under TEST."
@@ -277,6 +448,18 @@ def main():
     )
     parser.add_argument("--key", default="", help="Optional 64-char hex database key.")
     parser.add_argument(
+        "--cache-key-only",
+        action="store_true",
+        help="Save --key to the local DPAPI key cache for --src-dir, then exit without decrypting.",
+    )
+    parser.add_argument(
+        "--key-cache",
+        default="TEST/key-cache.json",
+        help="DPAPI-protected local key cache file under TEST.",
+    )
+    parser.add_argument("--show-key-cache", action="store_true", help="List cached accounts without showing keys.")
+    parser.add_argument("--no-key-cache", action="store_true", help="Do not read or write the local key cache.")
+    parser.add_argument(
         "--allow-real-source",
         action="store_true",
         help="Allow reading a source directory outside TEST. Output is still restricted to TEST.",
@@ -287,9 +470,21 @@ def main():
         action="store_true",
         help="Try additional read-only key pointer offsets near each v4 memory rule match.",
     )
+    parser.add_argument(
+        "--unsafe-hook-key-extract",
+        action="store_true",
+        help="Require typed confirmation before using a future hook-based key extraction backend.",
+    )
     args = parser.parse_args()
 
     output_root = require_inside_test(Path(args.output_dir), "Output directory")
+    key_cache_path = require_inside_test(Path(args.key_cache), "Key cache") if not args.no_key_cache else None
+
+    if args.show_key_cache:
+        if not key_cache_path:
+            raise SystemExit("--show-key-cache requires the key cache to be enabled.")
+        show_key_cache(key_cache_path)
+        return
 
     from wxManager.decrypt import decrypt_v4
     from wxManager.decrypt import get_info_v4
@@ -299,6 +494,7 @@ def main():
     account_root = None
     nickname = ""
     wxid = ""
+    key_source = "argument" if key else ""
 
     if args.wide_key_scan:
         os.environ["WECHATMSG_KEY_WIDE"] = "1"
@@ -307,14 +503,30 @@ def main():
         os.environ["WECHATMSG_KEY_DIAG"] = "1"
         print_diagnostics()
 
-    infos = get_info_v4() if not key or not args.src_dir or args.diagnose else []
-    if args.diagnose:
-        summarize_infos(infos)
-
     if args.src_dir:
         account_root = resolve_v4_account_root(args.src_dir, args.allow_real_source)
         nickname = account_root.name
         wxid = account_root.name.rsplit("_", 1)[0] if "_" in account_root.name else account_root.name
+        if not key and key_cache_path:
+            key, cached_root, identifier = lookup_cached_key(key_cache_path, wxid, account_root)
+            if key:
+                key_source = f"cache:{identifier}"
+                print(f"Using cached key for {identifier}.")
+    elif not key and key_cache_path:
+        key, cached_root, identifier = lookup_single_cached_account(key_cache_path)
+        if key:
+            account_root = Path(cached_root).resolve()
+            nickname = account_root.name
+            wxid = account_root.name.rsplit("_", 1)[0] if "_" in account_root.name else account_root.name
+            key_source = f"cache:{identifier}"
+            print(f"Using cached key for {identifier}.")
+
+    infos = get_info_v4() if (not key or not account_root or args.diagnose) else []
+    if args.diagnose:
+        summarize_infos(infos)
+
+    if account_root:
+        pass
     elif infos:
         info = select_wechat_info(Path(infos[0].wx_dir), infos)
         account_root = Path(info.wx_dir).resolve()
@@ -324,13 +536,34 @@ def main():
         raise SystemExit("No source directory was provided and no running WeChat v4 account was found.")
 
     if not key:
-        info = select_wechat_info(account_root, infos)
-        key = info.key
-        wxid = info.wxid or wxid
-        nickname = info.nick_name or nickname
+        try:
+            info = select_wechat_info(account_root, infos)
+            key = info.key
+            wxid = info.wxid or wxid
+            nickname = info.nick_name or nickname
+            key_source = "process-read"
+        except SystemExit:
+            if not args.unsafe_hook_key_extract:
+                raise
+            key = run_unsafe_hook_key_extract(wxid, account_root)
+            key_source = "unsafe-hook"
 
     if len(key) != 64:
         raise SystemExit("Database key must be a 64-character hex string.")
+
+    if args.cache_key_only:
+        if not key_cache_path:
+            raise SystemExit("--cache-key-only requires the key cache to be enabled.")
+        if key_source.startswith("cache:"):
+            print(f"Key cache already contains an entry for {wxid or account_root.name}.")
+        else:
+            save_cached_key(key_cache_path, key, wxid, account_root)
+            print(f"Saved key cache: {key_cache_path}")
+        return
+
+    if key_cache_path and key_source != "" and not key_source.startswith("cache:"):
+        save_cached_key(key_cache_path, key, wxid, account_root)
+        print(f"Saved key cache: {key_cache_path}")
 
     output_account_root = output_root / account_root.name
     output_db_storage = output_account_root / "db_storage"
