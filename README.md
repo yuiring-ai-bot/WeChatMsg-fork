@@ -41,22 +41,22 @@ skills/wechat-memory/          给后续 AI 协作使用的项目规则
 | `tools/wx_key_cli/scripts/build_native.ps1` | 构建 `wx_key_cli` 的原生 DLL。默认清理 MSBuild 中间目录，只保留 `tools/wx_key_cli/dist/wx_key.dll`。 | 是 |
 | `tools/wx_key_cli/scripts/wx_key_cli.py` | CLI-only key 获取工具。会调用本机编译出的 `wx_key.dll`，可单独获取 key 或写入 DPAPI key 缓存。 | 是 |
 
-### 历史示例和辅助脚本
+### 已清理遗留内容
 
-这些脚本保留为示例或旧功能参考，不是当前安全工作流的首选入口。
+为减少误用和仓库体积，当前版本已删除原项目的旧官网文档、旧截图、历史示例脚本、MemoAI 实验目录和上游 GitHub 模板。对应目录包括：
 
-| 文件 | 用途 | 直接运行 |
-| --- | --- | --- |
-| `example/1-decrypt.py` | 原项目示例：从运行中的微信读取信息并解密数据库。默认代码仍偏历史用法，可能把输出写到当前目录。当前建议改用 `tools/safe_decrypt.py`。 | 仅参考 |
-| `example/2-contact.py` | 原项目示例：读取解密库联系人和群成员。需要手工填 `db_dir`。 | 仅参考 |
-| `example/3-exporter.py` | 原项目示例：调用导出器导出单人或批量聊天记录。需要手工填 `db_dir` 和 `wxid`。当前建议改用 `tools/safe_export.py`。 | 仅参考 |
-| `MemoAI/qwen2-0.5b/app.py` | 本地 LM Studio 的 Gradio 聊天测试界面，使用 OpenAI-compatible API。 | 可运行 |
-| `MemoAI/api_server.py` | 原 ChatGLM/OpenAI-compatible API 服务示例，依赖较重，当前主链路不依赖它。 | 仅参考 |
-| `MemoAI/merge_json.py` | 旧训练数据 JSON 合并脚本，路径写死为历史本机路径，当前不建议直接运行。 | 仅参考 |
+```text
+.github/
+doc/
+example/
+MemoAI/
+```
+
+这些内容不属于当前安全工作流。后续如需示例，应围绕 `tools/safe_decrypt.py`、`tools/safe_export.py` 和计划中的 `tools/chat_memory_index.py` 重新编写。
 
 ### 导出模块
 
-`exporter/` 目录是导出实现层，通常由 `tools/safe_export.py` 或示例脚本调用。
+`exporter/` 目录是导出实现层，通常由 `tools/safe_export.py` 调用。
 
 | 文件 | 用途 |
 | --- | --- |
