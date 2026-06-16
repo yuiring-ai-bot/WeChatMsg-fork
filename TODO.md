@@ -55,3 +55,6 @@
 - [x] 支持 key 缓存，避免同一微信号重复 Hook
 - [x] 移除原项目内置 ffmpeg 可执行文件，改为外部 PATH 或 `FFMPEG_PATH`
 - [x] 主 README 更新为本地安全组合项目说明
+- [x] 增加联系人/群聊列表工具 `tools/list_contacts.py`
+- [x] 增加本地环境自检工具 `tools/self_check.py`
+- [x] 支持安全导出时指定 `--from-date` 和 `--to-date`

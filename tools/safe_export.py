@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import argparse
+from datetime import datetime
 import sys
 from pathlib import Path
 
@@ -27,6 +28,18 @@ def resolve_safe_db_dir(raw_path: str) -> Path:
     return db_dir
 
 
+def normalize_export_time(value: str, label: str) -> str:
+    try:
+        if len(value) == 10:
+            datetime.strptime(value, "%Y-%m-%d")
+            suffix = "00:00:00" if label == "from-date" else "23:59:59"
+            return f"{value} {suffix}"
+        datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+        return value
+    except ValueError as exc:
+        raise SystemExit(f"--{label} must be YYYY-MM-DD or YYYY-MM-DD HH:MM:SS: {value}") from exc
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Safely export from a copied WeChatMsg database directory."
@@ -37,6 +50,8 @@ def main():
     parser.add_argument("--format", choices=("html", "markdown", "txt"), default="html")
     parser.add_argument("--output-dir", default="TEST/safe-output")
     parser.add_argument("--text-only", action="store_true", help="Export only text/link messages.")
+    parser.add_argument("--from-date", default="1971-01-01", help="Start date/time, YYYY-MM-DD or YYYY-MM-DD HH:MM:SS.")
+    parser.add_argument("--to-date", default="2035-12-31", help="End date/time, YYYY-MM-DD or YYYY-MM-DD HH:MM:SS.")
     args = parser.parse_args()
 
     db_dir = resolve_safe_db_dir(args.db_dir)
@@ -67,13 +82,18 @@ def main():
     if args.text_only:
         message_types = {MessageType.Text, MessageType.Text2, MessageType.LinkMessage}
 
+    from_time = normalize_export_time(args.from_date, "from-date")
+    to_time = normalize_export_time(args.to_date, "to-date")
+    if from_time > to_time:
+        raise SystemExit("--from-date must not be later than --to-date.")
+
     exporter = exporter_class(
         database,
         contact,
         output_dir=str(output_dir),
         type_=file_type,
         message_types=message_types,
-        time_range=["1971-01-01 00:00:00", "2035-12-31 23:59:59"],
+        time_range=[from_time, to_time],
         group_members=None,
     )
     exporter.start()

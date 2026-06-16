@@ -16,6 +16,8 @@
 ```text
 tools/safe_decrypt.py          安全解密入口
 tools/safe_export.py           安全导出入口
+tools/list_contacts.py         从解密库列出联系人和群聊
+tools/self_check.py            本地环境自检
 tools/wx_key_cli/              wx_key 的 CLI-only 版本
 tools/wx_key_cli/scripts/      构建 DLL 和获取 key 的脚本
 wxManager/                     数据库读取、解析、解密逻辑
@@ -38,6 +40,8 @@ skills/wechat-memory/          给后续 AI 协作使用的项目规则
 | --- | --- | --- |
 | `tools/safe_decrypt.py` | 当前推荐的安全解密入口。负责读取 key 缓存、必要时显式 Hook 获取 key、只读读取微信目录、把解密副本写入 `TEST/decrypted-db`。 | 是 |
 | `tools/safe_export.py` | 当前推荐的安全导出入口。只从复制/解密后的数据库目录导出 HTML / Markdown / TXT，拒绝直接使用真实微信目录。 | 是 |
+| `tools/list_contacts.py` | 从复制/解密后的数据库目录列出联系人、群聊、公众号和 OpenIM 联系人，方便找到导出所需的 `wxid`。 | 是 |
+| `tools/self_check.py` | 检查当前 Python 依赖、`TEST` 目录、`wx_key.dll` 和 `ffmpeg` 状态。 | 是 |
 | `tools/wx_key_cli/scripts/build_native.ps1` | 构建 `wx_key_cli` 的原生 DLL。默认清理 MSBuild 中间目录，只保留 `tools/wx_key_cli/dist/wx_key.dll`。 | 是 |
 | `tools/wx_key_cli/scripts/wx_key_cli.py` | CLI-only key 获取工具。会调用本机编译出的 `wx_key.dll`，可单独获取 key 或写入 DPAPI key 缓存。 | 是 |
 
@@ -290,6 +294,25 @@ Decryption completed: ...\TEST\decrypted-db\wxid_xxx_xxxx\db_storage
 TEST\decrypted-db\wxid_xxx_xxxx\db_storage
 ```
 
+先列出联系人和群聊，找到要导出的 `wxid`：
+
+```powershell
+.\.venv\Scripts\python.exe tools\list_contacts.py `
+  --db-dir TEST\decrypted-db\wxid_xxx_xxxx\db_storage `
+  --db-version 4 `
+  --kind all
+```
+
+可以按名称或 wxid 过滤：
+
+```powershell
+.\.venv\Scripts\python.exe tools\list_contacts.py `
+  --db-dir TEST\decrypted-db\wxid_xxx_xxxx\db_storage `
+  --db-version 4 `
+  --query "项目" `
+  --kind group
+```
+
 导出 HTML：
 
 ```powershell
@@ -298,6 +321,8 @@ TEST\decrypted-db\wxid_xxx_xxxx\db_storage
   --db-version 4 `
   --wxid "联系人wxid" `
   --format html `
+  --from-date 2026-01-01 `
+  --to-date 2026-12-31 `
   --output-dir TEST\safe-output
 ```
 
@@ -310,6 +335,8 @@ TEST\decrypted-db\wxid_xxx_xxxx\db_storage
   --wxid "联系人wxid" `
   --format txt `
   --text-only `
+  --from-date 2026-01-01 `
+  --to-date 2026-12-31 `
   --output-dir TEST\safe-output
 ```
 
@@ -320,6 +347,18 @@ html
 markdown
 txt
 ```
+
+`--from-date` 和 `--to-date` 支持 `YYYY-MM-DD` 或 `YYYY-MM-DD HH:MM:SS`。不传时默认导出 `1971-01-01` 到 `2035-12-31`。
+
+## 本地自检
+
+换机器、重建虚拟环境或准备跑自动任务前，可以先运行：
+
+```powershell
+.\.venv\Scripts\python.exe tools\self_check.py
+```
+
+自检会检查 Python 依赖、`TEST` 目录、`tools/wx_key_cli/dist/wx_key.dll` 和 `ffmpeg` 状态。`wx_key.dll` 或 `ffmpeg` 缺失会提示为 `WARN`，不影响纯文本导出；缺少关键 Python 依赖会返回失败。
 
 ## 数据库说明
 

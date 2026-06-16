@@ -473,7 +473,7 @@ def main():
     parser.add_argument(
         "--unsafe-hook-key-extract",
         action="store_true",
-        help="Require typed confirmation before using a future hook-based key extraction backend.",
+        help="Use the local wx_key_cli hook backend after typed confirmation.",
     )
     args = parser.parse_args()
 
