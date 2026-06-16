@@ -85,7 +85,7 @@ powershell -ExecutionPolicy Bypass -File tools\wx_key_cli\scripts\build_native.p
 tools/wx_key_cli/dist/wx_key.dll
 ```
 
-该 DLL 是本机生成产物，已被忽略，不作为源码提交。
+该 DLL 是本机生成产物，已被忽略，不作为源码提交。构建脚本默认会清理 MSBuild 中间目录，只保留 `dist\wx_key.dll`；如果要调试 C++ 构建，可以加 `-KeepBuildTree`。
 
 ## 一步解密
 

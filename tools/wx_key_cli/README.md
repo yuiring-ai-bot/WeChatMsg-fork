@@ -28,6 +28,12 @@ The DLL is generated at:
 dist\wx_key.dll
 ```
 
+Intermediate MSBuild directories are removed after a successful build. Use `-KeepBuildTree` when you need to inspect compiler outputs for debugging:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build_native.ps1 -KeepBuildTree
+```
+
 ## Capture Key
 
 Run WeChat first, then:

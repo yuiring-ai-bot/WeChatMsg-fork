@@ -3,7 +3,8 @@ param(
     [string]$Configuration = "Release",
     [ValidateSet("x64")]
     [string]$Platform = "x64",
-    [switch]$SkipAssetCopy
+    [switch]$SkipAssetCopy,
+    [switch]$KeepBuildTree
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,6 +13,8 @@ $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $projectPath = Join-Path $repoRoot "wx_key\wx_key.vcxproj"
 $assetDllPath = Join-Path $repoRoot "dist\wx_key.dll"
 $builtDllPath = Join-Path $repoRoot "wx_key\$Platform\$Configuration\wx_key.dll"
+$solutionBuildRoot = Join-Path $repoRoot "wx_key\$Platform"
+$projectBuildRoot = Join-Path $repoRoot "wx_key\wx_key\$Platform"
 
 function Get-VCTargetsPathForMSBuild {
     param([string]$MSBuildPath)
@@ -147,4 +150,16 @@ if (-not $SkipAssetCopy) {
     New-Item -ItemType Directory -Force -Path (Split-Path $assetDllPath) | Out-Null
     Copy-Item -LiteralPath $builtDllPath -Destination $assetDllPath -Force
     Write-Host "Copied native DLL to $assetDllPath"
+}
+
+if (-not $KeepBuildTree) {
+    foreach ($path in @($solutionBuildRoot, $projectBuildRoot)) {
+        if (Test-Path -LiteralPath $path) {
+            $resolved = Resolve-Path -LiteralPath $path
+            if ($resolved.Path.StartsWith($repoRoot.Path, [System.StringComparison]::OrdinalIgnoreCase)) {
+                Remove-Item -LiteralPath $resolved.Path -Recurse -Force
+            }
+        }
+    }
+    Write-Host "Removed intermediate native build directories. Use -KeepBuildTree to keep them."
 }
