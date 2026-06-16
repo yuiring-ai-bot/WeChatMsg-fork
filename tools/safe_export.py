@@ -73,7 +73,7 @@ def main():
         output_dir=str(output_dir),
         type_=file_type,
         message_types=message_types,
-        time_range=["1970-01-01 00:00:00", "2035-12-31 23:59:59"],
+        time_range=["1971-01-01 00:00:00", "2035-12-31 23:59:59"],
         group_members=None,
     )
     exporter.start()

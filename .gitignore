@@ -20,8 +20,17 @@ server
 *.txt
 *.ui
 *.pyc
+__pycache__/
+*.dll
 *.bat
 *.log
+日志文件-*.log
 *.spec
 test*
 wordcloud.html
+tools/wx_key/
+tools/wx_key_cli.py
+tools/wx_key_cli/.git/
+tools/wx_key_cli/dist/
+tools/wx_key_cli/wx_key/x64/
+tools/wx_key_cli/wx_key/wx_key/x64/

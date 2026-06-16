@@ -5,7 +5,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -528,14 +527,37 @@ def copy_files(file_tasks: List[Tuple[str, str, str]]):
 
 
 def get_ffmpeg_path():
-    # 获取打包后的资源目录
-    resource_dir = getattr(sys, '_MEIPASS', os.path.abspath(os.path.dirname(__file__)))
+    configured_path = os.environ.get("FFMPEG_PATH")
+    if configured_path and os.path.exists(configured_path):
+        return configured_path
+    return shutil.which("ffmpeg")
 
-    # 构建 FFmpeg 可执行文件的路径
-    ffmpeg_path = os.path.join(resource_dir, 'ffmpeg.exe')
-    if not os.path.exists(ffmpeg_path):
-        ffmpeg_path = os.path.join(resource_dir, 'resources', 'ffmpeg.exe')
-    return ffmpeg_path
+
+def convert_pcm_to_mp3(pcm_path, mp3_path):
+    ffmpeg_path = get_ffmpeg_path()
+    if not ffmpeg_path:
+        logger.error("ffmpeg not found. Install ffmpeg from an official distribution channel or set FFMPEG_PATH.")
+        return False
+    result = subprocess.run(
+        [
+            ffmpeg_path,
+            "-loglevel",
+            "quiet",
+            "-y",
+            "-f",
+            "s16le",
+            "-i",
+            pcm_path,
+            "-ar",
+            "44100",
+            "-ac",
+            "1",
+            mp3_path,
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    return result.returncode == 0
 
 
 def decode_audio_to_mp3(media_buffer, output_dir, filename):
@@ -556,24 +578,7 @@ def decode_audio_to_mp3(media_buffer, output_dir, filename):
         pcm_buf = pysilk.decode(buf, to_wav=False, sample_rate=44100)
         with open(pcm_path, 'wb') as f:
             f.write(pcm_buf)
-        # pysilk.decode_file(open("brainpower.pcm", "rb"), to_wav=False)
-        # 调用系统上的 ffmpeg 可执行文件
-        # 获取 FFmpeg 可执行文件的路径
-        ffmpeg_path = get_ffmpeg_path()
-        # print(ffmpeg_path)
-        # # 调用 FFmpeg
-        if os.path.exists(ffmpeg_path):
-            cmd = f'''"{ffmpeg_path}" -loglevel quiet -y -f s16le -i "{pcm_path}" -ar 44100 -ac 1 "{mp3_path}"'''
-            # system(cmd)
-            # 使用subprocess.run()执行命令
-            subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        else:
-            # 源码运行的时候下面的有效
-            # 这里不知道怎么捕捉异常
-            cmd = f'''"{os.path.join(os.getcwd(), 'app', 'resources', 'data', 'ffmpeg.exe')}" -loglevel quiet -y -f s16le -i "{pcm_path}" -ar 44100 -ac 1 "{mp3_path}"'''
-            # system(cmd)
-            # 使用subprocess.run()执行命令
-            subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        convert_pcm_to_mp3(pcm_path, mp3_path)
         # if os.path.exists(silk_path):
         #     os.remove(silk_path)
         # if os.path.exists(pcm_path):
@@ -581,10 +586,7 @@ def decode_audio_to_mp3(media_buffer, output_dir, filename):
     except Exception as e:
         print(f"Error: {e}")
         logger.error(f'语音错误\n{traceback.format_exc()}')
-        cmd = f'''"{os.path.join(os.getcwd(), 'app', 'resources', 'data', 'ffmpeg.exe')}" -loglevel quiet -y -f s16le -i "{pcm_path}" -ar 44100 -ac 1 "{mp3_path}"'''
-        # system(cmd)
-        # 使用subprocess.run()执行命令
-        subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        convert_pcm_to_mp3(pcm_path, mp3_path)
     finally:
         return mp3_path
 
