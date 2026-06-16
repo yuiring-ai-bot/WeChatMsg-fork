@@ -28,6 +28,149 @@ skills/wechat-memory/          给后续 AI 协作使用的项目规则
 
 `TEST` 是默认工作区。解密结果、key 缓存、导出结果都放在这里，避免污染真实微信目录。
 
+## 脚本文件索引
+
+本节只描述 Git 中已纳入版本管理的脚本文件。被忽略的本地目录，例如 `.venv`、`TEST`、`tools/wx_key`、`tools/wx_key_cli/dist`，不属于源码入口。
+
+### 推荐入口
+
+| 文件 | 用途 | 直接运行 |
+| --- | --- | --- |
+| `tools/safe_decrypt.py` | 当前推荐的安全解密入口。负责读取 key 缓存、必要时显式 Hook 获取 key、只读读取微信目录、把解密副本写入 `TEST/decrypted-db`。 | 是 |
+| `tools/safe_export.py` | 当前推荐的安全导出入口。只从复制/解密后的数据库目录导出 HTML / Markdown / TXT，拒绝直接使用真实微信目录。 | 是 |
+| `tools/wx_key_cli/scripts/build_native.ps1` | 构建 `wx_key_cli` 的原生 DLL。默认清理 MSBuild 中间目录，只保留 `tools/wx_key_cli/dist/wx_key.dll`。 | 是 |
+| `tools/wx_key_cli/scripts/wx_key_cli.py` | CLI-only key 获取工具。会调用本机编译出的 `wx_key.dll`，可单独获取 key 或写入 DPAPI key 缓存。 | 是 |
+
+### 历史示例和辅助脚本
+
+这些脚本保留为示例或旧功能参考，不是当前安全工作流的首选入口。
+
+| 文件 | 用途 | 直接运行 |
+| --- | --- | --- |
+| `example/1-decrypt.py` | 原项目示例：从运行中的微信读取信息并解密数据库。默认代码仍偏历史用法，可能把输出写到当前目录。当前建议改用 `tools/safe_decrypt.py`。 | 仅参考 |
+| `example/2-contact.py` | 原项目示例：读取解密库联系人和群成员。需要手工填 `db_dir`。 | 仅参考 |
+| `example/3-exporter.py` | 原项目示例：调用导出器导出单人或批量聊天记录。需要手工填 `db_dir` 和 `wxid`。当前建议改用 `tools/safe_export.py`。 | 仅参考 |
+| `MemoAI/qwen2-0.5b/app.py` | 本地 LM Studio 的 Gradio 聊天测试界面，使用 OpenAI-compatible API。 | 可运行 |
+| `MemoAI/api_server.py` | 原 ChatGLM/OpenAI-compatible API 服务示例，依赖较重，当前主链路不依赖它。 | 仅参考 |
+| `MemoAI/merge_json.py` | 旧训练数据 JSON 合并脚本，路径写死为历史本机路径，当前不建议直接运行。 | 仅参考 |
+
+### 导出模块
+
+`exporter/` 目录是导出实现层，通常由 `tools/safe_export.py` 或示例脚本调用。
+
+| 文件 | 用途 |
+| --- | --- |
+| `exporter/__init__.py` | 汇总导出器类。`DocxExporter` 和 `ExcelExporter` 是可选依赖，缺包时不会阻断 HTML/TXT/Markdown。 |
+| `exporter/config.py` | 导出格式枚举和导出相关配置。 |
+| `exporter/exporter.py` | 导出公共基类和共享逻辑，包括资源复制、语音转换、文件命名等。`ffmpeg` 从 PATH 或 `FFMPEG_PATH` 读取。 |
+| `exporter/exporter_html.py` | HTML 聊天记录导出。 |
+| `exporter/exporter_txt.py` | TXT 聊天记录导出。 |
+| `exporter/exporter_markdown.py` | Markdown 聊天记录导出。 |
+| `exporter/exporter_csv.py` | CSV 导出。 |
+| `exporter/exporter_docx.py` | Word/DOCX 导出，需要 `python-docx`。 |
+| `exporter/exporter_xlsx.py` | Excel/XLSX 导出，需要相关 Excel 依赖。 |
+| `exporter/exporter_json.py` | JSON 导出实现。 |
+| `exporter/exporter_ai_txt.py` | 面向 AI 训练/处理的文本导出格式。 |
+
+### 数据库管理层
+
+`wxManager/` 是数据库读取、统一接口和微信 3.x/4.x 适配层。一般不直接运行。
+
+| 文件 | 用途 |
+| --- | --- |
+| `wxManager/__init__.py` | 暴露 `DatabaseConnection`，按数据库版本创建 `DataBaseV3` 或 `DataBaseV4`。 |
+| `wxManager/db_main.py` | 定义数据库统一抽象接口 `DataBaseInterface` 和上下文结构。 |
+| `wxManager/manager_v3.py` | 微信 3.x 数据库聚合接口，实现联系人、消息、媒体、收藏等统一读取。 |
+| `wxManager/manager_v4.py` | 微信 4.x 数据库聚合接口，实现 v4 的联系人、会话、消息、资源读取。 |
+| `wxManager/merge.py` | 多库合并、增量写入和数据迁移辅助函数。 |
+
+### 微信 3.x 数据库适配
+
+| 文件 | 用途 |
+| --- | --- |
+| `wxManager/db_v3/audio2text.py` | 微信 3.x 语音转文字缓存库读取。 |
+| `wxManager/db_v3/emotion.py` | 表情数据库读取。 |
+| `wxManager/db_v3/favorite.py` | 收藏数据库读取。 |
+| `wxManager/db_v3/hard_link_file.py` | 文件 hardlink 路径索引读取。 |
+| `wxManager/db_v3/hard_link_image.py` | 图片 hardlink 路径索引读取。 |
+| `wxManager/db_v3/hard_link_video.py` | 视频 hardlink 路径索引读取。 |
+| `wxManager/db_v3/media_msg.py` | 语音媒体数据读取和音频转换。 |
+| `wxManager/db_v3/micro_msg.py` | 联系人、群聊等 MicroMsg 数据读取。 |
+| `wxManager/db_v3/misc.py` | 杂项数据读取。 |
+| `wxManager/db_v3/msg.py` | 主消息库读取。 |
+| `wxManager/db_v3/open_im_contact.py` | OpenIM 联系人读取。 |
+| `wxManager/db_v3/open_im_media.py` | OpenIM 媒体读取。 |
+| `wxManager/db_v3/open_im_msg.py` | OpenIM 消息读取。 |
+| `wxManager/db_v3/public_msg.py` | 公众号/公众消息读取。 |
+| `wxManager/db_v3/sns.py` | 朋友圈相关数据读取。 |
+
+### 微信 4.x 数据库适配
+
+| 文件 | 用途 |
+| --- | --- |
+| `wxManager/db_v4/audio2text.py` | 微信 4.x 语音转文字缓存库读取。 |
+| `wxManager/db_v4/biz_message.py` | 公众号、服务号、商业会话消息读取。 |
+| `wxManager/db_v4/contact.py` | 联系人数据库读取。 |
+| `wxManager/db_v4/emotion.py` | 表情数据库读取。 |
+| `wxManager/db_v4/hardlink.py` | 图片、视频、文件 hardlink 路径索引读取。 |
+| `wxManager/db_v4/head_image.py` | 头像缓存读取。 |
+| `wxManager/db_v4/media.py` | 语音媒体数据读取和音频转换。 |
+| `wxManager/db_v4/message.py` | 主消息库读取。 |
+| `wxManager/db_v4/session.py` | 会话列表读取。 |
+
+### 解密和 key 发现层
+
+这些模块由 `tools/safe_decrypt.py` 或示例脚本调用。除调试外，不建议单独运行内部模块。
+
+| 文件 | 用途 |
+| --- | --- |
+| `wxManager/decrypt/__init__.py` | 暴露 `get_info_v3` / `get_info_v4`，扫描运行中的微信进程并返回账号信息。 |
+| `wxManager/decrypt/common.py` | key、微信路径、账号信息等公共结构和工具函数。 |
+| `wxManager/decrypt/decrypt_v3.py` | 微信 3.x SQLCipher 数据库解密。 |
+| `wxManager/decrypt/decrypt_v4.py` | 微信 4.x SQLCipher 数据库解密。 |
+| `wxManager/decrypt/decrypt_dat.py` | `.dat` 图片/资源异或密钥识别和解码辅助。 |
+| `wxManager/decrypt/get_bias_addr.py` | 微信版本偏移地址辅助。 |
+| `wxManager/decrypt/get_wx_info.py` | 旧版微信信息读取辅助。 |
+| `wxManager/decrypt/wx_info_v3.py` | 微信 3.x 进程内账号、路径、key 读取。 |
+| `wxManager/decrypt/wx_info_v4.py` | 微信 4.x 进程内账号、路径、key 读取和诊断。 |
+| `wxManager/decrypt/wxinfo.py` | 微信信息结构和兼容辅助。 |
+
+### 消息解析层
+
+| 文件 | 用途 |
+| --- | --- |
+| `wxManager/parser/wechat_v3.py` | 微信 3.x 消息类型解析注册表和解析工厂。 |
+| `wxManager/parser/wechat_v4.py` | 微信 4.x 消息类型解析注册表和解析工厂。 |
+| `wxManager/parser/audio_parser.py` | 语音消息解析。 |
+| `wxManager/parser/emoji_parser.py` | 表情消息 XML/字段解析。 |
+| `wxManager/parser/file_parser.py` | 文件、图片、媒体路径和类型解析。 |
+| `wxManager/parser/link_parser.py` | 链接、小程序、引用等 XML 消息解析。 |
+| `wxManager/parser/util/common.py` | 解析层通用工具。 |
+| `wxManager/parser/util/protocbuf/*_pb2.py` | 由 `.proto` 生成的 Protobuf 解析代码，用于联系人、群成员、消息附加结构等。 |
+
+### 模型和日志层
+
+| 文件 | 用途 |
+| --- | --- |
+| `wxManager/model/__init__.py` | 暴露消息、联系人、枚举等模型类。 |
+| `wxManager/model/contact.py` | 联系人、本人、群成员等数据模型。 |
+| `wxManager/model/db_model.py` | 数据库基础类和连接管理模型。 |
+| `wxManager/model/message.py` | 消息类型枚举和各种消息对象模型。 |
+| `wxManager/log/__init__.py` | 暴露 logger。 |
+| `wxManager/log/logger.py` | 项目日志配置。 |
+
+### wx_key_cli 原生源码
+
+`tools/wx_key_cli/wx_key/` 是 C++ DLL 源码，不是 Python 运行脚本。它通过 `build_native.ps1` 编译。
+
+| 路径 | 用途 |
+| --- | --- |
+| `tools/wx_key_cli/wx_key/*.sln` / `*.vcxproj` | Visual Studio/MSBuild 工程文件。 |
+| `tools/wx_key_cli/wx_key/include/*.h` | 进程扫描、Hook 控制、远程内存、IPC、shellcode 生成等头文件。 |
+| `tools/wx_key_cli/wx_key/src/*.cpp` | key 获取 DLL 的主要实现。 |
+| `tools/wx_key_cli/wx_key/vendor/minhook_official/` | 官方 MinHook 源码，构建时使用。 |
+| `tools/wx_key_cli/wx_key/vendor/xbyak/` | xbyak 头文件，构建 shellcode 时使用。 |
+
 ## 安全边界
 
 默认流程不会修改真实微信数据库。
