@@ -16,6 +16,7 @@
 
 ```text
 tools/safe_decrypt.py          安全解密入口
+tools/chat_gui.py              本地桌面聊天查看界面
 tools/chat_viewer.py           本地聊天查看界面
 tools/safe_export.py           安全导出入口
 tools/list_contacts.py         从解密库列出联系人和群聊
@@ -41,7 +42,8 @@ skills/wechat-memory/          给后续 AI 协作使用的项目规则
 | 文件 | 用途 | 直接运行 |
 | --- | --- | --- |
 | `tools/safe_decrypt.py` | 当前推荐的安全解密入口。负责读取 key 缓存、必要时显式 Hook 获取 key、只读读取微信目录、把解密副本写入 `TEST/decrypted-db`。 | 是 |
-| `tools/chat_viewer.py` | 本地聊天查看界面。只读取 `TEST/decrypted-db` 下的解密副本，支持文本、群聊、图片、语音、表情和链接预览，不做导出和分析。 | 是 |
+| `tools/chat_gui.py` | 本地桌面聊天查看界面。只读取 `TEST/decrypted-db` 下的解密副本，支持文本、群聊、图片、语音、表情和链接预览，不做导出和分析。 | 是 |
+| `tools/chat_viewer.py` | 本地浏览器聊天查看界面。功能与桌面版共用读取逻辑，默认不会自动打开浏览器，只有传 `--open` 才会打开。 | 是 |
 | `tools/safe_export.py` | 安全导出入口。只从复制/解密后的数据库目录导出 HTML / Markdown / TXT，拒绝直接使用真实微信目录。 | 是 |
 | `tools/list_contacts.py` | 从复制/解密后的数据库目录列出联系人、群聊、公众号和 OpenIM 联系人，方便找到导出所需的 `wxid`。 | 是 |
 | `tools/self_check.py` | 检查当前 Python 依赖、`TEST` 目录、`wx_key.dll` 和 `ffmpeg` 状态。 | 是 |
@@ -291,23 +293,34 @@ Decryption completed: ...\TEST\decrypted-db\wxid_xxx_xxxx\db_storage
 
 ## 本地聊天查看
 
-如果只是想恢复聊天界面，不需要导出和分析，使用 `tools/chat_viewer.py`：
+如果只是想恢复聊天界面，不需要导出和分析，优先使用桌面窗口版：
+
+```powershell
+.\.venv\Scripts\python.exe tools\chat_gui.py `
+  --db-dir TEST\decrypted-db\wxid_xxx_xxxx\db_storage `
+  --db-version 4
+```
+
+它会直接打开本地窗口，不需要浏览器。图片、语音等媒体临时缓存到 `TEST/viewer-cache`。
+
+如果需要备用的浏览器版，使用 `tools/chat_viewer.py`：
 
 ```powershell
 .\.venv\Scripts\python.exe tools\chat_viewer.py `
   --db-dir TEST\decrypted-db\wxid_xxx_xxxx\db_storage `
   --db-version 4 `
-  --port 8765 `
-  --open
+  --port 8765
 ```
 
-打开后访问：
+然后手动访问：
 
 ```text
 http://127.0.0.1:8765/
 ```
 
-这个界面只读取解密后的数据库副本。它会把需要显示的图片、语音和视频临时缓存到 `TEST/viewer-cache`，不会写入真实微信目录，也不会生成导出文件。
+浏览器版只有加 `--open` 时才会自动打开页面。
+
+这两个界面都只读取解密后的数据库副本。它们会把需要显示的图片、语音和视频临时缓存到 `TEST/viewer-cache`，不会写入真实微信目录，也不会生成导出文件。
 
 当前支持：
 
