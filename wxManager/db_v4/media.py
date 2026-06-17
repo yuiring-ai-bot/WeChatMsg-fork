@@ -13,6 +13,8 @@ import shutil
 import subprocess
 import traceback
 
+from pysilk import decode
+
 from wxManager.merge import increase_update_data, increase_data
 from wxManager.model import DataBaseBase
 from wxManager.log import logger

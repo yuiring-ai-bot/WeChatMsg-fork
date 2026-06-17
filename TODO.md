@@ -58,3 +58,4 @@
 - [x] 增加联系人/群聊列表工具 `tools/list_contacts.py`
 - [x] 增加本地环境自检工具 `tools/self_check.py`
 - [x] 支持安全导出时指定 `--from-date` 和 `--to-date`
+- [x] 增加本地聊天查看界面 `tools/chat_viewer.py`，支持群聊、图片、语音、表情和链接预览

@@ -7,6 +7,8 @@ import base64
 
 import xml.etree.ElementTree as ET
 
+from pysilk import decode
+
 from wxManager.merge import increase_data
 from wxManager.log import logger
 from wxManager.model import DataBaseBase
