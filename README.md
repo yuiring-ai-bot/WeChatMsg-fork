@@ -326,6 +326,25 @@ TEST\decrypted-db\wxid_xxx_xxxx\db_storage
   --output-dir TEST\safe-output
 ```
 
+显式批量导出匹配到的联系人或群聊：
+
+```powershell
+.\.venv\Scripts\python.exe tools\safe_export.py `
+  --db-dir TEST\decrypted-db\wxid_xxx_xxxx\db_storage `
+  --db-version 4 `
+  --all `
+  --kind group `
+  --query "项目" `
+  --limit 20 `
+  --format txt `
+  --text-only `
+  --from-date 2026-01-01 `
+  --to-date 2026-12-31 `
+  --output-dir TEST\safe-output
+```
+
+`--all` 是显式批量模式；不传 `--wxid` 时必须加 `--all`，避免误导出大量明文聊天记录。批量导出可用 `--kind`、`--query` 和 `--limit` 缩小范围。
+
 更简单的文本导出：
 
 ```powershell

@@ -7,25 +7,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from tools.safe_export import resolve_safe_db_dir
-
-
-def display_name(contact) -> str:
-    remark = (getattr(contact, "remark", "") or "").strip()
-    nickname = (getattr(contact, "nickname", "") or "").strip()
-    alias = (getattr(contact, "alias", "") or "").strip()
-    return remark or nickname or alias or getattr(contact, "wxid", "")
-
-
-def contact_kind(contact) -> str:
-    wxid = getattr(contact, "wxid", "")
-    if wxid.endswith("@chatroom"):
-        return "group"
-    if wxid.startswith("gh_"):
-        return "public"
-    if wxid.endswith("@openim"):
-        return "openim"
-    return "person"
+from tools.safe_export import contact_kind, contact_matches, display_name, resolve_safe_db_dir
 
 
 def main():
@@ -52,15 +34,12 @@ def main():
     for contact in database.get_contacts():
         wxid = getattr(contact, "wxid", "")
         kind = contact_kind(contact)
-        if args.kind != "all" and kind != args.kind:
-            continue
         name = display_name(contact)
+        if not contact_matches(contact, args.kind, query):
+            continue
         nickname = getattr(contact, "nickname", "") or ""
         remark = getattr(contact, "remark", "") or ""
         alias = getattr(contact, "alias", "") or ""
-        haystack = "\n".join([wxid, name, nickname, remark, alias]).casefold()
-        if query and query not in haystack:
-            continue
         rows.append(
             {
                 "kind": kind,
